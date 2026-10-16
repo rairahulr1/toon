@@ -26,15 +26,22 @@ Modern AI agents and developer workflows suffer from a data representation dilem
 
 Here is how the exact same 20-service microservices architecture dataset is represented across formats:
 
-### 1. Markdown Table (`696 tokens`)
-```markdown
-| Name | Service Mesh | Runtime | Database | P99 Latency (ms) | Uptime (%) | Tier |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| auth-gateway | Istio | Go 1.22 | Redis 7.2 | 14 | 99.99 | Critical |
-| billing-ledger | Linkerd | PHP 8.3 Laravel | PostgreSQL 16 | 38 | 99.95 | Critical |
-| ... | ... | ... | ... | ... | ... | ... |
+### 1. Pure XML (`1,858 tokens` — 2.94x larger)
+```xml
+<services>
+  <service>
+    <name>auth-gateway</name>
+    <service_mesh>Istio</service_mesh>
+    <runtime>Go 1.22</runtime>
+    <database>Redis 7.2</database>
+    <p99_latency_ms>14</p99_latency_ms>
+    <uptime_pct>99.99</uptime_pct>
+    <tier>Critical</tier>
+  </service>
+  <!-- Repeated 20 times -->
+</services>
 ```
-*Disadvantage*: Pipe delimiters and whitespace padding consume tokens; large tables routinely cause delimiter misalignment.
+*Disadvantage*: XML provides clean semantic tags, but repetitive opening and closing tags blow up token count by nearly 300%.
 
 ### 2. Semantic HTML (`1,911 tokens` — 3.03x larger)
 ```html
@@ -68,16 +75,23 @@ Here is how the exact same 20-service microservices architecture dataset is repr
 ```
 *Disadvantage*: Repetitive keys on every object consume tokens; deep nested brackets clutter context.
 
-### 4. TOON (`631 tokens` — Baseline 1.0x)
+### 4. Markdown Table (`696 tokens`)
+```markdown
+| Name | Service Mesh | Runtime | Database | P99 Latency (ms) | Uptime (%) | Tier |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| auth-gateway | Istio | Go 1.22 | Redis 7.2 | 14 | 99.99 | Critical |
+| ... | ... | ... | ... | ... | ... | ... |
+```
+*Disadvantage*: Pipe delimiters and whitespace padding consume tokens; large tables routinely cause delimiter misalignment.
+
+### 5. TOON (`631 tokens` — Baseline 1.0x)
 ```toon
 services[20]{name,service_mesh,runtime,database,p99_latency_ms,uptime_pct,tier}:
   auth-gateway,Istio,Go 1.22,Redis 7.2,14,99.99,Critical
   billing-ledger,Linkerd,PHP 8.3 Laravel,PostgreSQL 16,38,99.95,Critical
-  notification-hub,Consul,Node.js 20,MongoDB 7.0,85,99.90,Standard
-  order-router,Istio,Java 21 Spring,MySQL 8.4,42,99.99,Critical
   ...
 ```
-*Advantage*: Schema declared once; explicit `[20]` prevents hallucinations; 100% compact comma-delimited data rows.
+*Advantage*: Schema declared once; explicit `[20]` prevents hallucinations; 100% compact comma-delimited data rows. Can be wrapped in **XML-style semantic container tags** (`<metadata>`, `<dataset>`, `<rules>`) for unambiguous LLM boundary recognition without token bloat.
 
 ---
 
@@ -88,6 +102,7 @@ Measured using the standard OpenAI `cl100k_base` and `o200k_base` tokenizers on 
 | Format | File Size (Bytes) | Characters | Tokens (`cl100k`) | Tokens (`o200k`) | Token Ratio | Savings vs Format |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Semantic HTML** | 6,684 | 6,684 | **1,911** | 1,916 | 3.03x | **66.98% less tokens** |
+| **Pure XML** | 6,336 | 6,336 | **1,858** | 1,905 | 2.94x | **66.04% less tokens** |
 | **JSON (Indented)** | 4,730 | 4,730 | **1,473** | 1,487 | 2.33x | **57.16% less tokens** |
 | **Markdown Table** | 2,145 | 2,145 | **696** | 704 | 1.10x | **9.34% less tokens** |
 | **TOON** | **1,769** | **1,769** | **631** | **638** | **1.0x (Baseline)** | — |

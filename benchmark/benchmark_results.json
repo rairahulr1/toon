@@ -1,4 +1,11 @@
 {
+  "Pure XML": {
+    "bytes": 6336,
+    "chars": 6336,
+    "lines": 196,
+    "tokens_cl100k": 1858,
+    "tokens_o200k": 1905
+  },
   "Semantic HTML": {
     "bytes": 6684,
     "chars": 6684,
@@ -28,9 +35,11 @@
     "tokens_o200k": 638
   },
   "Analysis": {
+    "savings_vs_xml_pct": 66.04,
     "savings_vs_html_pct": 66.98,
     "savings_vs_json_pct": 57.16,
     "savings_vs_markdown_pct": 9.34,
+    "density_multiplier_vs_xml": 2.94,
     "density_multiplier_vs_html": 3.03,
     "density_multiplier_vs_json": 2.33,
     "density_multiplier_vs_md": 1.1

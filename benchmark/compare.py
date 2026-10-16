@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Benchmark comparison script: Markdown vs Semantic HTML vs JSON vs TOON.
+Benchmark comparison script: XML vs Semantic HTML vs JSON vs Markdown vs TOON.
 Measures token counts (cl100k_base, o200k_base), character length, byte size,
 and token reduction ratios.
 """
@@ -28,12 +28,14 @@ def count_tokens(text, encoding_name):
     return len(enc.encode(text))
 
 def main():
-    md_content = load_file("dataset.md")
+    xml_content = load_file("dataset.xml")
     html_content = load_file("dataset.html")
     json_content = load_file("dataset.json")
+    md_content = load_file("dataset.md")
     toon_content = load_file("dataset.toon")
 
     formats = {
+        "Pure XML": xml_content,
         "Semantic HTML": html_content,
         "JSON (Indented)": json_content,
         "Markdown": md_content,
@@ -51,34 +53,38 @@ def main():
             "tokens_o200k": count_tokens(content, "o200k_base"),
         }
 
+    base_xml = results["Pure XML"]["tokens_cl100k"]
     base_html = results["Semantic HTML"]["tokens_cl100k"]
     base_json = results["JSON (Indented)"]["tokens_cl100k"]
     base_md = results["Markdown"]["tokens_cl100k"]
     toon_tokens = results["TOON"]["tokens_cl100k"]
 
     results["Analysis"] = {
+        "savings_vs_xml_pct": round((1 - toon_tokens / base_xml) * 100, 2),
         "savings_vs_html_pct": round((1 - toon_tokens / base_html) * 100, 2),
         "savings_vs_json_pct": round((1 - toon_tokens / base_json) * 100, 2),
         "savings_vs_markdown_pct": round((1 - toon_tokens / base_md) * 100, 2),
+        "density_multiplier_vs_xml": round(base_xml / toon_tokens, 2),
         "density_multiplier_vs_html": round(base_html / toon_tokens, 2),
         "density_multiplier_vs_json": round(base_json / toon_tokens, 2),
         "density_multiplier_vs_md": round(base_md / toon_tokens, 2),
     }
 
-    print("\n" + "=" * 75)
-    print("  TOON vs MARKDOWN vs JSON vs SEMANTIC HTML TOKEN BENCHMARK")
-    print("=" * 75)
+    print("\n" + "=" * 80)
+    print("  TOON vs PURE XML vs SEMANTIC HTML vs JSON vs MARKDOWN BENCHMARK")
+    print("=" * 80)
     print(f"{'Format':<18} | {'Bytes':<7} | {'Chars':<7} | {'cl100k':<8} | {'o200k':<8} | {'vs TOON'}")
-    print("-" * 75)
-    for name in ["Semantic HTML", "JSON (Indented)", "Markdown", "TOON"]:
+    print("-" * 80)
+    for name in ["Pure XML", "Semantic HTML", "JSON (Indented)", "Markdown", "TOON"]:
         d = results[name]
         ratio = f"{round(d['tokens_cl100k'] / toon_tokens, 2)}x tokens" if name != "TOON" else "Baseline (1.0x)"
         print(f"{name:<18} | {d['bytes']:<7} | {d['chars']:<7} | {d['tokens_cl100k']:<8} | {d['tokens_o200k']:<8} | {ratio}")
-    print("=" * 75)
+    print("=" * 80)
+    print(f"Token Reduction vs Pure XML:      {results['Analysis']['savings_vs_xml_pct']}% less tokens ({results['Analysis']['density_multiplier_vs_xml']}x more dense)")
     print(f"Token Reduction vs Semantic HTML: {results['Analysis']['savings_vs_html_pct']}% less tokens ({results['Analysis']['density_multiplier_vs_html']}x more dense)")
     print(f"Token Reduction vs JSON:          {results['Analysis']['savings_vs_json_pct']}% less tokens ({results['Analysis']['density_multiplier_vs_json']}x more dense)")
     print(f"Token Reduction vs Markdown:      {results['Analysis']['savings_vs_markdown_pct']}% less tokens ({results['Analysis']['density_multiplier_vs_md']}x more dense)")
-    print("=" * 75 + "\n")
+    print("=" * 80 + "\n")
 
     out_file = BENCH_DIR / "benchmark_results.json"
     out_file.write_text(json.dumps(results, indent=2), encoding="utf-8")
