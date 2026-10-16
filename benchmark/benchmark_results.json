@@ -1,0 +1,38 @@
+{
+  "Semantic HTML": {
+    "bytes": 6684,
+    "chars": 6684,
+    "lines": 228,
+    "tokens_cl100k": 1911,
+    "tokens_o200k": 1916
+  },
+  "JSON (Indented)": {
+    "bytes": 4730,
+    "chars": 4730,
+    "lines": 190,
+    "tokens_cl100k": 1473,
+    "tokens_o200k": 1487
+  },
+  "Markdown": {
+    "bytes": 2145,
+    "chars": 2145,
+    "lines": 36,
+    "tokens_cl100k": 696,
+    "tokens_o200k": 704
+  },
+  "TOON": {
+    "bytes": 1769,
+    "chars": 1769,
+    "lines": 32,
+    "tokens_cl100k": 631,
+    "tokens_o200k": 638
+  },
+  "Analysis": {
+    "savings_vs_html_pct": 66.98,
+    "savings_vs_json_pct": 57.16,
+    "savings_vs_markdown_pct": 9.34,
+    "density_multiplier_vs_html": 3.03,
+    "density_multiplier_vs_json": 2.33,
+    "density_multiplier_vs_md": 1.1
+  }
+}

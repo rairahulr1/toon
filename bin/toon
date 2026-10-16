@@ -1,0 +1,414 @@
+#!/usr/bin/env python3
+"""
+TOON (Token-Oriented Object Notation) CLI & Agent Utility
+Provides commands for AI agents and developers to validate, format, sync, and convert TOON documents.
+"""
+
+import sys
+import os
+import re
+import shutil
+import argparse
+from pathlib import Path
+
+REPO_ROOT = Path('/home/rahul/AI-memory').resolve()
+ASSET_DIR = REPO_ROOT
+ASSET_FILES = ('style.css', 'toon-renderer.js')
+
+def find_asset_dir(explicit=None):
+    """Locate the directory holding style.css and toon-renderer.js."""
+    candidates = []
+    if explicit:
+        candidates.append(Path(explicit).expanduser().resolve())
+    candidates.append(ASSET_DIR)
+    candidates.append(Path(__file__).resolve().parent.parent)
+    for c in candidates:
+        if all((c / f).is_file() for f in ASSET_FILES):
+            return c
+    return None
+
+def ensure_assets(html_path, mode, asset_root=None):
+    """Make the companion HTML actually renderable.
+
+    A TOON page is only useful if it draws in a browser. Without style.css and
+    toon-renderer.js the <main id="app"> stays empty forever, and the failure is
+    silent - sync still reports success. So resolve the assets and copy them
+    beside the HTML (default: the folder becomes self-contained and works over
+    file://), or link to them.
+    """
+    src_dir = find_asset_dir(asset_root)
+    if src_dir is None:
+        print(f"Warning: {html_path.name} references renderer assets that do not exist "
+              f"and none were found (looked in: {asset_root or ASSET_DIR}). "
+              f"The page will render blank. Pass --assets <dir> to locate them.",
+              file=sys.stderr)
+        return None
+    for f in ASSET_FILES:
+        src, dst = src_dir / f, html_path.parent / f
+        if mode == 'link':
+            continue
+        if dst.is_file() and dst.read_bytes() == src.read_bytes():
+            continue
+        shutil.copy2(src, dst)
+    return src_dir
+
+def sanitize_key(s):
+    s = s.strip().lower()
+    s = re.sub(r'[^\w\s-]', '', s)
+    s = re.sub(r'[\s-]+', '_', s)
+    return s or 'section'
+
+def clean_cell(v):
+    v = v.strip()
+    v = re.sub(r'(\d),(\d)', r'\1\2', v)
+    if ',' in v and not (v.startswith('"') and v.endswith('"')):
+        v = v.replace(',', ';')
+    return v
+
+def extract_toon(content):
+    """Extract TOON text from either a markdown file (```toon ... ```) or HTML (<dataset id="data"> or <script id="data">)."""
+    dataset_match = re.search(r'<dataset\s+id=["\']data["\']>([\s\S]*?)</dataset>', content)
+    if dataset_match:
+        return dataset_match.group(1).strip()
+    html_match = re.search(r'<script\s+id=["\']data["\']\s+type=["\']text/toon["\']>([\s\S]*?)</script>', content)
+    if html_match:
+        return html_match.group(1).strip()
+    md_match = re.search(r'```toon\n(.*?)\n```', content, re.DOTALL)
+    if md_match:
+        return md_match.group(1).strip()
+    return None
+
+def validate_toon_text(text):
+    """Validates TOON syntax and returns (is_valid, errors, stats)."""
+    errors = []
+    stats = {'tables': 0, 'lists': 0, 'text_blocks': 0, 'meta_keys': 0, 'rows': 0, 'items': 0}
+    lines = text.splitlines()
+    
+    current_sec = None
+    sec_type = None
+    expected_cols = 0
+    declared_count = 0
+    actual_count = 0
+    
+    def check_count():
+        nonlocal actual_count, declared_count, current_sec, sec_type
+        if current_sec and declared_count is not None and declared_count > 0:
+            if actual_count != declared_count:
+                errors.append(f"Section '{current_sec}' declared count [{declared_count}] but found {actual_count} {sec_type} entries")
+
+    for line_num, raw_line in enumerate(lines, 1):
+        trimmed = raw_line.strip()
+        if not trimmed or trimmed.startswith('#'):
+            continue
+
+        # Check for XML tag envelope: <tag> or </tag>
+        open_tag_m = re.match(r'^<([a-zA-Z0-9_-]+)>$', trimmed)
+        if open_tag_m:
+            check_count()
+            tag = open_tag_m.group(1).lower()
+            if tag == 'metadata':
+                sec_type = 'meta'
+                current_sec = None
+            elif tag in ('records', 'context', 'dataset'):
+                current_sec = None
+                sec_type = None
+            else:
+                current_sec = tag
+                sec_type = 'item'
+                declared_count = None
+                actual_count = 0
+                stats['lists'] += 1
+            continue
+
+        close_tag_m = re.match(r'^<\/([a-zA-Z0-9_-]+)>$', trimmed)
+        if close_tag_m:
+            check_count()
+            current_sec = None
+            sec_type = None
+            continue
+
+        if sec_type == 'meta':
+            kv_m = re.match(r'^([a-zA-Z0-9_-]+):\s*(.+)$', trimmed)
+            if kv_m:
+                stats['meta_keys'] += 1
+            continue
+            
+        # Table header: name[count]{col1,col2,...}:
+        table_m = re.match(r'^([a-zA-Z0-9_-]+)(?:\[(\d+)\])?\{([^}]+)\}:?$', trimmed)
+        if table_m:
+            check_count()
+            current_sec = table_m.group(1)
+            declared_count = int(table_m.group(2)) if table_m.group(2) else None
+            fields = [f.strip() for f in table_m.group(3).split(',')]
+            expected_cols = len(fields)
+            sec_type = 'row'
+            actual_count = 0
+            stats['tables'] += 1
+            continue
+            
+        # List header: name[count]:
+        list_m = re.match(r'^([a-zA-Z0-9_-]+)\[(\d*)\]:?$', trimmed)
+        if list_m:
+            check_count()
+            current_sec = list_m.group(1)
+            declared_count = int(list_m.group(2)) if list_m.group(2) else None
+            sec_type = 'item'
+            actual_count = 0
+            stats['lists'] += 1
+            continue
+            
+        # Generic block: name:
+        block_m = re.match(r'^([a-zA-Z0-9_-]+):$', trimmed)
+        if block_m:
+            check_count()
+            current_sec = block_m.group(1)
+            declared_count = None
+            sec_type = 'text'
+            actual_count = 0
+            stats['text_blocks'] += 1
+            continue
+            
+        # Top-level KV: key: value
+        kv_m = re.match(r'^([a-zA-Z0-9_-]+):\s*(.+)$', trimmed)
+        if kv_m and not raw_line.startswith('  ') and not raw_line.startswith('\t'):
+            check_count()
+            current_sec = None
+            stats['meta_keys'] += 1
+            continue
+            
+        # Row / Item / Text inside section
+        if current_sec:
+            if sec_type == 'row':
+                # Check column count
+                # Simple comma split taking into account quotes
+                cells = []
+                cur = ''
+                in_quotes = False
+                for c in trimmed:
+                    if c == '"':
+                        in_quotes = not in_quotes
+                    elif c == ',' and not in_quotes:
+                        cells.append(cur.strip())
+                        cur = ''
+                        continue
+                    cur += c
+                cells.append(cur.strip())
+                
+                if expected_cols > 0 and len(cells) != expected_cols:
+                    errors.append(f"Line {line_num} in table '{current_sec}': expected {expected_cols} columns, found {len(cells)}")
+                actual_count += 1
+                stats['rows'] += 1
+            elif sec_type == 'item':
+                actual_count += 1
+                stats['items'] += 1
+            elif sec_type == 'text':
+                pass
+
+    check_count()
+    return len(errors) == 0, errors, stats
+
+def cmd_validate(args):
+    filepath = Path(args.file).resolve()
+    if not filepath.exists():
+        print(f"Error: File not found: {filepath}", file=sys.stderr)
+        return 1
+    content = filepath.read_text(encoding='utf-8')
+    toon_text = extract_toon(content)
+    if not toon_text:
+        print(f"Error: No TOON payload found in {filepath.name}", file=sys.stderr)
+        return 1
+        
+    is_valid, errors, stats = validate_toon_text(toon_text)
+    if is_valid:
+        print(f"✓ VALID TOON: {filepath.name}")
+        print(f"  Tables: {stats['tables']} ({stats['rows']} rows)")
+        print(f"  Lists: {stats['lists']} ({stats['items']} items)")
+        print(f"  Text Blocks: {stats['text_blocks']}")
+        return 0
+    else:
+        print(f"✗ INVALID TOON: {filepath.name} ({len(errors)} errors)", file=sys.stderr)
+        for err in errors:
+            print(f"  - {err}", file=sys.stderr)
+        return 1
+
+def cmd_sync(args):
+    """Syncs markdown TOON block with companion HTML file."""
+    md_path = Path(args.file).resolve()
+    if not md_path.exists() or md_path.suffix != '.md':
+        print(f"Error: Must specify an existing .md file: {md_path}", file=sys.stderr)
+        return 1
+        
+    content = md_path.read_text(encoding='utf-8')
+    toon_text = extract_toon(content)
+    if not toon_text:
+        print(f"Error: No ```toon block found in {md_path.name}", file=sys.stderr)
+        return 1
+        
+    # Extract Title
+    title_m = re.search(r'^#\s+(.+)$', content, re.MULTILINE)
+    title = title_m.group(1).strip() if title_m else md_path.stem
+    
+    html_name = f"{md_path.stem}.html"
+    html_path = md_path.parent / html_name
+
+    assets_dir = ensure_assets(html_path, args.assets_mode, args.assets)
+
+    # Prefer a relative link when the assets already sit in the output dir,
+    # otherwise fall back to ./ because ensure_assets just placed them there.
+    try:
+        rel_depth = len(md_path.parent.relative_to(REPO_ROOT).parts)
+        rel_prefix = "../" * rel_depth if rel_depth > 0 else "./"
+    except ValueError:
+        rel_prefix = "./"
+
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{title}</title>
+  <link rel="stylesheet" href="{rel_prefix}style.css">
+  <script src="{rel_prefix}toon-renderer.js"></script>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>{title}</h1>
+    <p>Rendered from TOON specification &bull; <a href="{md_path.name}">View Raw Markdown</a></p>
+  </header>
+  <main id="app">
+    <!-- Rendered automatically from TOON data below -->
+  </main>
+  <script id="data" type="text/toon">
+{toon_text}
+  </script>
+</div>
+</body>
+</html>
+"""
+    html_path.write_text(html_content, encoding='utf-8')
+    where = f" (assets: {assets_dir} -> {html_path.parent})" if assets_dir else " (assets MISSING - page will render blank)"
+    print(f"✓ Synced: {md_path.name} -> {html_name} ({len(html_content):,} bytes){where}")
+    return 0
+
+def cmd_format(args):
+    """Auto-formats and updates array row counts in a TOON file."""
+    filepath = Path(args.file).resolve()
+    if not filepath.exists():
+        print(f"Error: File not found: {filepath}", file=sys.stderr)
+        return 1
+        
+    content = filepath.read_text(encoding='utf-8')
+    toon_text = extract_toon(content)
+    if not toon_text:
+        print(f"Error: No TOON payload found in {filepath.name}", file=sys.stderr)
+        return 1
+        
+    lines = toon_text.splitlines()
+    formatted_lines = []
+    
+    current_sec = None
+    sec_header_idx = None
+    sec_type = None
+    sec_fields = None
+    sec_entries = []
+    
+    def flush_sec():
+        nonlocal sec_header_idx, sec_type, sec_entries, current_sec, sec_fields
+        if current_sec and sec_header_idx is not None:
+            count = len(sec_entries)
+            if sec_type == 'table':
+                formatted_lines[sec_header_idx] = f"{current_sec}[{count}]{{{','.join(sec_fields)}}}:"
+            elif sec_type == 'list':
+                formatted_lines[sec_header_idx] = f"{current_sec}[{count}]:"
+            for e in sec_entries:
+                formatted_lines.append(f"  {e}")
+            formatted_lines.append("")
+        sec_entries = []
+        current_sec = None
+        sec_header_idx = None
+
+    for line in lines:
+        trimmed = line.strip()
+        if not trimmed:
+            continue
+            
+        table_m = re.match(r'^([a-zA-Z0-9_-]+)(?:\[\d*\])?\{([^}]+)\}:?$', trimmed)
+        if table_m:
+            flush_sec()
+            current_sec = table_m.group(1)
+            sec_fields = [f.strip() for f in table_m.group(2).split(',')]
+            sec_type = 'table'
+            sec_header_idx = len(formatted_lines)
+            formatted_lines.append("") # placeholder
+            continue
+            
+        list_m = re.match(r'^([a-zA-Z0-9_-]+)\[\d*\]:?$', trimmed)
+        if list_m:
+            flush_sec()
+            current_sec = list_m.group(1)
+            sec_type = 'list'
+            sec_header_idx = len(formatted_lines)
+            formatted_lines.append("") # placeholder
+            continue
+            
+        block_m = re.match(r'^([a-zA-Z0-9_-]+):$', trimmed)
+        if block_m:
+            flush_sec()
+            formatted_lines.append(f"{block_m.group(1)}:")
+            current_sec = block_m.group(1)
+            sec_type = 'text'
+            sec_header_idx = None
+            continue
+            
+        kv_m = re.match(r'^([a-zA-Z0-9_-]+):\s*(.+)$', trimmed)
+        if kv_m and not line.startswith('  '):
+            flush_sec()
+            formatted_lines.append(f"{kv_m.group(1)}: {kv_m.group(2).strip()}")
+            continue
+            
+        if current_sec:
+            if sec_type in ('table', 'list'):
+                sec_entries.append(trimmed)
+            elif sec_type == 'text':
+                formatted_lines.append(f"  {trimmed}")
+                
+    flush_sec()
+    new_toon = "\n".join(formatted_lines).strip()
+    
+    # Write back
+    if filepath.suffix == '.md':
+        new_content = re.sub(r'```toon\n(.*?)\n```', f'```toon\n{new_toon}\n```', content, flags=re.DOTALL)
+        filepath.write_text(new_content, encoding='utf-8')
+    elif filepath.suffix == '.html':
+        new_content = re.sub(r'(<script\s+id=["\']data["\']\s+type=["\']text/toon["\']>)([\s\S]*?)(</script>)',
+                             f'\\1\n{new_toon}\n\\3', content)
+        filepath.write_text(new_content, encoding='utf-8')
+        
+    print(f"✓ Formatted and updated counts: {filepath.name}")
+    return 0
+
+def main():
+    parser = argparse.ArgumentParser(description="TOON (Token-Oriented Object Notation) Tooling for Agents")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    
+    p_val = subparsers.add_parser("validate", help="Validate TOON document syntax, schemas and row counts")
+    p_val.add_argument("file", help="Path to .md or .html file containing TOON")
+    p_val.set_defaults(func=cmd_validate)
+    
+    p_sync = subparsers.add_parser("sync", help="Synchronize companion HTML view from markdown TOON block")
+    p_sync.add_argument("file", help="Path to .md file")
+    p_sync.add_argument("--assets", help="Directory containing style.css and toon-renderer.js (default: %s)" % ASSET_DIR)
+    p_sync.add_argument("--assets-mode", choices=("copy", "link"), default="copy",
+                        help="copy = make the output folder self-contained (default); link = reference in place")
+    p_sync.set_defaults(func=cmd_sync)
+    
+    p_fmt = subparsers.add_parser("format", help="Format TOON block and re-compute schema array counts")
+    p_fmt.add_argument("file", help="Path to .md or .html file")
+    p_fmt.set_defaults(func=cmd_format)
+    
+    args = parser.parse_args()
+    sys.exit(args.func(args))
+
+if __name__ == '__main__':
+    main()
